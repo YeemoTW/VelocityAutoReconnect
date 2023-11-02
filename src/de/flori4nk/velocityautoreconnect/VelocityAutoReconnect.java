@@ -24,6 +24,7 @@ import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
+import com.velocitypowered.api.proxy.ConnectionRequestBuilder;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
@@ -32,11 +33,14 @@ import de.flori4nk.velocityautoreconnect.listeners.KickListener;
 import de.flori4nk.velocityautoreconnect.misc.Utility;
 import de.flori4nk.velocityautoreconnect.storage.ConfigurationManager;
 import de.flori4nk.velocityautoreconnect.storage.PlayerManager;
+import net.kyori.adventure.text.Component;
 
 import java.io.File;
 import java.nio.file.Path;
 import java.util.Collection;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
@@ -105,31 +109,33 @@ public class VelocityAutoReconnect {
 
         // Schedule the reconnector task
         proxyServer.getScheduler().buildTask(this, () -> {
-            Collection<Player> connectedPlayers = limboServer.getPlayersConnected();
-            // Prevent NullPointerException when Limbo is empty
-            if (connectedPlayers.isEmpty()) return;
-            
-            Player nextPlayer = connectedPlayers.iterator().next();
-            RegisteredServer previousServer = playerManager.getPreviousServer(nextPlayer);
+                    Collection<Player> connectedPlayers = limboServer.getPlayersConnected();
+                    // Prevent NullPointerException when Limbo is empty
+                    if (connectedPlayers.isEmpty()) return;
 
-            // If enabled, check if a server responds to pings before connecting
-            try {
-                if (configurationManager.getBooleanProperty("pingcheck")) {
+                    Player nextPlayer = connectedPlayers.iterator().next();
+                    RegisteredServer previousServer = playerManager.getPreviousServer(nextPlayer);
+
+                    // If enabled, check if a server responds to pings before connecting
                     try {
-                        previousServer.ping().join();
-                    } catch (CompletionException completionException) {
-                        // Server failed to respond to ping request, return to prevent spam
-                        return;
+                        if (configurationManager.getBooleanProperty("pingcheck")) {
+                            try {
+                                previousServer.ping().join();
+                            } catch (CompletionException completionException) {
+                                // Server failed to respond to ping request, return to prevent spam
+                                return;
+                            }
+                        }
+                        Utility.logInformational(String.format("Connecting %s to %s.", nextPlayer.getUsername(), previousServer.getServerInfo().getName()));
+                        CompletableFuture<ConnectionRequestBuilder.Result> result = nextPlayer.createConnectionRequest(previousServer).connect();
+                        nextPlayer.sendMessage(Component.text("\n\n\n\n\n\n"));
+                        nextPlayer.sendMessage(result.get().getReasonComponent().orElse(Component.text("")));
+                    } catch (CompletionException | InterruptedException | ExecutionException exception) {
+                        // Prevent console from being spammed when a server is offline and ping-check is disabled
                     }
-                }
-                Utility.logInformational(String.format("Connecting %s to %s.", nextPlayer.getUsername(), previousServer.getServerInfo().getName()));
-                nextPlayer.createConnectionRequest(previousServer).connect();
-            } catch (CompletionException exception) {
-                // Prevent console from being spammed when a server is offline and ping-check is disabled
-            }
-        })
-            .repeat(configurationManager.getIntegerProperty("task-interval-ms"), TimeUnit.MILLISECONDS)
-            .schedule();
+                })
+                .repeat(configurationManager.getIntegerProperty("task-interval-ms"), TimeUnit.MILLISECONDS)
+                .schedule();
     }
 
 
